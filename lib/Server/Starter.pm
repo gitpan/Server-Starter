@@ -5,13 +5,15 @@ use strict;
 use warnings;
 use Carp;
 use Fcntl;
+use IO::Handle;
 use IO::Socket::INET;
 use POSIX qw(:sys_wait_h);
 use Proc::Wait3;
+use Scope::Guard;
 
 use Exporter qw(import);
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our @EXPORT_OK = qw(start_server server_ports);
 
 my @signals_received;
@@ -27,6 +29,33 @@ sub start_server {
         unless ref $ports eq 'ARRAY';
     croak "mandatory option ``exec'' is missing or is not an arrayref\n"
         unless $opts->{exec} && ref $opts->{exec} eq 'ARRAY';
+    
+    # open pid file
+    my $pid_file_guard = sub {
+        return unless $opts->{pid_file};
+        open my $fh, '>', $opts->{pid_file}
+            or die "failed to open file:$opts->{pid_file}: $!";
+        print $fh "$$\n";
+        close $fh;
+        return Scope::Guard->new(
+            sub {
+                unlink $opts->{pid_file};
+            },
+        );
+    }->();
+    
+    # open log file
+    if ($opts->{log_file}) {
+        open my $fh, '>>', $opts->{log_file}
+            or die "failed to open log file:$opts->{log_file}: $!";
+        STDOUT->flush;
+        STDERR->flush;
+        open STDOUT, '>&', $fh
+            or die "failed to dup STDOUT to file: $!";
+        open STDERR, '>&', $fh
+            or die "failed to dup STDERR to file: $!";
+        close $fh;
+    }
     
     print STDERR "start_server (pid:$$) starting now...\n";
     
