@@ -7,20 +7,28 @@ use Carp;
 use Fcntl;
 use IO::Handle;
 use IO::Socket::INET;
+use List::MoreUtils qw(uniq);
 use POSIX qw(:sys_wait_h);
 use Proc::Wait3;
 use Scope::Guard;
 
 use Exporter qw(import);
 
-our $VERSION = '0.08';
-our @EXPORT_OK = qw(start_server server_ports);
+our $VERSION = '0.09';
+our @EXPORT_OK = qw(start_server restart_server server_ports);
 
 my @signals_received;
 
 sub start_server {
-    my $opts = @_ == 1 ? shift : { @_ };
-    $opts->{interval} ||= 1;
+    my $opts = {
+        (@_ == 1 ? @$_[0] : @_),
+    };
+    $opts->{interval} = 1
+        if not defined $opts->{interval};
+    $opts->{signal_on_hup} ||= 'TERM';
+    # normalize to the one that can be passed to kill
+    $opts->{signal_on_hup} =~ tr/a-z/A-Z/;
+    $opts->{signal_on_hup} =~ s/^SIG//i;
     
     # prepare args
     my $ports = $opts->{port}
@@ -56,6 +64,13 @@ sub start_server {
             or die "failed to dup STDERR to file: $!";
         close $fh;
     }
+    
+    # create guard that removes the status file
+    my $status_file_guard = $opts->{status_file} && Scope::Guard->new(
+        sub {
+            unlink $opts->{status_file};
+        },
+    );
     
     print STDERR "start_server (pid:$$) starting now...\n";
     
@@ -98,9 +113,30 @@ sub start_server {
     } for (qw/INT TERM HUP/);
     $SIG{PIPE} = 'IGNORE';
     
+    # setup status monitor
+    my ($current_worker, %old_workers);
+    my $update_status = $opts->{status_file}
+        ? sub {
+            my $tmpfn = "$opts->{status_file}.$$";
+            open my $tmpfh, '>', $tmpfn
+                or die "failed to create temporary file:$tmpfn:$!";
+            my %gen_pid = (
+                ($current_worker
+                 ? ($ENV{SERVER_STARTER_GENERATION} => $current_worker)
+                 : ()),
+                map { $old_workers{$_} => $_ } keys %old_workers,
+            );
+            print $tmpfh "$_:$gen_pid{$_}\n"
+                for sort keys %gen_pid;
+            close $tmpfh;
+            rename $tmpfn, $opts->{status_file}
+                or die "failed to rename $tmpfn to $opts->{status_file}:$!";
+        } : sub {
+        };
+    
     # the main loop
-    my $current_worker = _start_worker($opts);
-    my %old_workers;
+    $current_worker = _start_worker($opts);
+    $update_status->();
     while (1) {
         my @r = wait3(! scalar @signals_received);
         if (@r) {
@@ -111,20 +147,22 @@ sub start_server {
             } else {
                 print STDERR "old worker $died_worker died, status:$status\n";
                 delete $old_workers{$died_worker};
+                $update_status->();
             }
         }
         for (; @signals_received; shift @signals_received) {
             if ($signals_received[0] eq 'HUP') {
                 print STDERR "received HUP, spawning a new worker\n";
-                $old_workers{$current_worker} = 1;
+                $old_workers{$current_worker} = $ENV{SERVER_STARTER_GENERATION};
                 $current_worker = _start_worker($opts);
-                print STDERR "new worker is now running, sending TERM to old workers:";
+                $update_status->();
+                print STDERR "new worker is now running, sending $opts->{signal_on_hup} to old workers:";
                 if (%old_workers) {
                     print STDERR join(',', sort keys %old_workers), "\n";
                 } else {
                     print STDERR "none\n";
                 }
-                kill 'TERM', $_
+                kill $opts->{signal_on_hup}, $_
                     for sort keys %old_workers;
             } else {
                 goto CLEANUP;
@@ -134,7 +172,7 @@ sub start_server {
     
  CLEANUP:
     # cleanup
-    $old_workers{$current_worker} = 1;
+    $old_workers{$current_worker} = $ENV{SERVER_STARTER_GENERATION};
     undef $current_worker;
     print STDERR "received $signals_received[0], sending TERM to all workers:",
         join(',', sort keys %old_workers), "\n";
@@ -145,10 +183,53 @@ sub start_server {
             my ($died_worker, $status) = @r;
             print STDERR "worker $died_worker died, status:$status\n";
             delete $old_workers{$died_worker};
+            $update_status->();
         }
     }
     
     print STDERR "exitting\n";
+}
+
+sub restart_server {
+    my $opts = {
+        (@_ == 1 ? @$_[0] : @_),
+    };
+    die "--restart option requires --pid-file and --status-file to be set as well\n"
+        unless $opts->{pid_file} && $opts->{status_file};
+    
+    # get pid
+    my $pid = do {
+        open my $fh, '<', $opts->{pid_file}
+            or die "failed to open file:$opts->{pid_file}:$!";
+        my $line = <$fh>;
+        chomp $line;
+        $line;
+    };
+    
+    # function that returns a list of active generations in sorted order
+    my $get_generations = sub {
+        open my $fh, '<', $opts->{status_file}
+            or die "failed to open file:$opts->{status_file}:$!";
+        uniq sort { $a <=> $b } map { /^(\d+):/ ? ($1) : () } <$fh>;
+    };
+    
+    # wait for this generation
+    my $wait_for = do {
+        my @gens = $get_generations->()
+            or die "no active process found in the status file";
+        pop(@gens) + 1;
+    };
+    
+    # send HUP
+    kill 'HUP', $pid
+        or die "failed to send SIGHUP to the server process:$!";
+    
+    # wait for the generation
+    while (1) {
+        my @gens = $get_generations->();
+        last if scalar(@gens) == 1 && $gens[0] == $wait_for;
+        sleep 1;
+    }
 }
 
 sub server_ports {
