@@ -15,7 +15,7 @@ use Scope::Guard;
 
 use Exporter qw(import);
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 our @EXPORT_OK = qw(start_server restart_server server_ports);
 
 my @signals_received;
@@ -26,11 +26,14 @@ sub start_server {
     };
     $opts->{interval} = 1
         if not defined $opts->{interval};
-    $opts->{signal_on_hup} ||= 'TERM';
-    # normalize to the one that can be passed to kill
-    $opts->{signal_on_hup} =~ tr/a-z/A-Z/;
-    $opts->{signal_on_hup} =~ s/^SIG//i;
-    
+    $opts->{signal_on_hup}  ||= 'TERM';
+    $opts->{signal_on_term} ||= 'TERM';
+    for ($opts->{signal_on_hup}, $opts->{signal_on_term}) {
+        # normalize to the one that can be passed to kill
+        tr/a-z/A-Z/;
+        s/^SIG//i;
+    }
+
     # prepare args
     my $ports = $opts->{port};
     my $paths = $opts->{path};
@@ -162,6 +165,7 @@ sub start_server {
         };
     
     # the main loop
+    my $term_signal;
     $current_worker = _start_worker($opts);
     $update_status->();
     while (1) {
@@ -192,6 +196,7 @@ sub start_server {
                 kill $opts->{signal_on_hup}, $_
                     for sort keys %old_workers;
             } else {
+                $term_signal = $signals_received[0] eq 'TERM' ? $opts->{signal_on_term} : 'TERM';
                 goto CLEANUP;
             }
         }
@@ -201,9 +206,10 @@ sub start_server {
     # cleanup
     $old_workers{$current_worker} = $ENV{SERVER_STARTER_GENERATION};
     undef $current_worker;
-    print STDERR "received $signals_received[0], sending TERM to all workers:",
+
+    print STDERR "received $signals_received[0], sending $term_signal to all workers:",
         join(',', sort keys %old_workers), "\n";
-    kill 'TERM', $_
+    kill $term_signal, $_
         for sort keys %old_workers;
     while (%old_workers) {
         if (my @r = wait3(1)) {
@@ -214,7 +220,7 @@ sub start_server {
         }
     }
     
-    print STDERR "exitting\n";
+    print STDERR "exiting\n";
 }
 
 sub restart_server {
@@ -277,9 +283,10 @@ sub _start_worker {
         die "fork(2) failed:$!"
             unless defined $pid;
         if ($pid == 0) {
+            my @args = @{$opts->{exec}};
             # child process
-            { exec(@{$opts->{exec}}) };
-            print STDERR "failed to exec $opts->{exec}->[0]:$!";
+            { exec { $args[0] } @args };
+            print STDERR "failed to exec $args[0]$!";
             exit(255);
         }
         print STDERR "starting new worker $pid\n";
@@ -322,7 +329,7 @@ Server::Starter - a superdaemon for hot-deploying server programs
 
 =head1 DESCRIPTION
 
-It is often a pain to write a server program that supports graceful restarts, with no resource leaks.  L<Server::Starter>, solves the problem by splitting the task into two.  One is L<start_server>, a script provided as a part of the module, which works as a superdaemon that binds to zero or more TCP ports or unix sockets, and repeatedly spawns the server program that actually handles the necessary tasks (for example, responding to incoming commenctions).  The spawned server programs under L<Server::Starter> call accept(2) and handle the requests.
+It is often a pain to write a server program that supports graceful restarts, with no resource leaks.  L<Server::Starter> solves the problem by splitting the task into two.  One is L<start_server>, a script provided as a part of the module, which works as a superdaemon that binds to zero or more TCP ports or unix sockets, and repeatedly spawns the server program that actually handles the necessary tasks (for example, responding to incoming commenctions).  The spawned server programs under L<Server::Starter> call accept(2) and handle the requests.
 
 To gracefully restart the server program, send SIGHUP to the superdaemon.  The superdaemon spawns a new server program, and if (and only if) it starts up successfully, sends SIGTERM to the old server program.
 
@@ -343,7 +350,7 @@ Returns zero or more file descriptors on which the server program should call ac
 
 =item start_server
 
-Starts the superdaemon.  Used by the C<start_server> scirpt.
+Starts the superdaemon.  Used by the C<start_server> script.
 
 =back
 
