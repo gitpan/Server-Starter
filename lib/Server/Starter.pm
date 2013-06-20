@@ -15,7 +15,7 @@ use Scope::Guard;
 
 use Exporter qw(import);
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 our @EXPORT_OK = qw(start_server restart_server server_ports);
 
 my @signals_received;
@@ -285,6 +285,9 @@ sub _start_worker {
         if ($pid == 0) {
             my @args = @{$opts->{exec}};
             # child process
+            if ( exists $opts->{dir} ) {
+                chdir $opts->{dir} or die "failed to chdir:$!";
+            }
             { exec { $args[0] } @args };
             print STDERR "failed to exec $args[0]$!";
             exit(255);

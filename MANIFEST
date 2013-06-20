@@ -25,3 +25,4 @@ t/02-startfail-server.pl
 t/02-startfail.t
 t/03-starter-unix-echod.pl
 t/03-starter-unix.t
+t/04-starter-dir.t
