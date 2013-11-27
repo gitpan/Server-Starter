@@ -15,7 +15,7 @@ use Scope::Guard;
 
 use Exporter qw(import);
 
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 our @EXPORT_OK = qw(start_server restart_server server_ports);
 
 my @signals_received;
@@ -28,6 +28,7 @@ sub start_server {
         if not defined $opts->{interval};
     $opts->{signal_on_hup}  ||= 'TERM';
     $opts->{signal_on_term} ||= 'TERM';
+    $opts->{backlog} ||= Socket::SOMAXCONN();
     for ($opts->{signal_on_hup}, $opts->{signal_on_term}) {
         # normalize to the one that can be passed to kill
         tr/a-z/A-Z/;
@@ -99,7 +100,7 @@ sub start_server {
         my $sock;
         if ($port =~ /^\s*(\d+)\s*$/) {
             $sock = IO::Socket::INET->new(
-                Listen    => Socket::SOMAXCONN(),
+                Listen    => $opts->{backlog},
                 LocalPort => $port,
                 Proto     => 'tcp',
                 ReuseAddr => 1,
@@ -107,7 +108,7 @@ sub start_server {
         } elsif ($port =~ /^\s*(.*)\s*:\s*(\d+)\s*$/) {
             $port = "$1:$2";
             $sock = IO::Socket::INET->new(
-                Listen    => Socket::SOMAXCONN(),
+                Listen    => $opts->{backlog},
                 LocalAddr => $port,
                 Proto     => 'tcp',
                 ReuseAddr => 1,
@@ -137,7 +138,7 @@ sub start_server {
         unlink $path;
         my $saved_umask = umask(0);
         my $sock = IO::Socket::UNIX->new(
-            Listen => Socket::SOMAXCONN(),
+            Listen => $opts->{backlog},
             Local  => $path,
         ) or die "failed to listen to file $path:$!";
         umask($saved_umask);
