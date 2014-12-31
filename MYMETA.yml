@@ -3,26 +3,26 @@ abstract: 'a superdaemon for hot-deploying server programs'
 author:
   - 'Kazuho Oku'
 build_requires:
-  ExtUtils::MakeMaker: 6.42
+  ExtUtils::MakeMaker: '6.59'
 configure_requires:
-  ExtUtils::MakeMaker: 6.42
+  ExtUtils::MakeMaker: '0'
 dynamic_config: 0
-generated_by: 'Module::Install version 1.00, CPAN::Meta::Converter version 2.131560'
+generated_by: 'Module::Install version 1.14, CPAN::Meta::Converter version 2.120921'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
-  version: 1.4
+  version: '1.4'
 name: Server-Starter
 no_index:
   directory:
     - inc
     - t
 requires:
-  Getopt::Long: 0
-  List::MoreUtils: 0
-  Proc::Wait3: 0
-  Scope::Guard: 0
-  perl: 5.008
+  Getopt::Long: '0'
+  List::MoreUtils: '0'
+  Proc::Wait3: '0'
+  Scope::Guard: '0'
+  perl: '5.008'
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.16
+version: 0.18_01
